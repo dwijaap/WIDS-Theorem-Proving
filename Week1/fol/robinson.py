@@ -13,7 +13,7 @@ def is_func(x:str):
     if (is_var(x)):
         return False, "", []
     
-    if x and x[0].islower() and x.find("(") != -1:
+    if x and x.find("(") != -1:
         _ , func , args = get_literal(x)
         return True, func, args
     
@@ -27,8 +27,24 @@ def get_literal(t:str):
     if neg:
         t = t[1:]
     predicate = t[0:t.find("(")]
-    arguments = t[t.find("(")+1:-1].split(",")
-    return neg, predicate, arguments
+    arguments = t[t.find("(")+1:-1]
+    args = []
+    depth = 0
+    curr = ""
+    for c in arguments:
+        if c=='(':
+            depth += 1
+        elif c==')':
+            depth -= 1
+
+        if c!=',':
+            curr += c
+        if depth==0 and c==',':
+            args.append(curr)
+            curr = ""
+    args.append(curr)
+        
+    return neg, predicate, args
 
 
 # applies substitution on a term
@@ -50,6 +66,11 @@ def apply_sub_literal(t, sub):
     s = f"{pred}({','.join(new_args)})"
     return "~" + s if neg else s
 
+def inside(t1,t2):
+    f1,n1,a1 = is_func(t1)
+    if f1 and t2 in a1:
+        return True
+    return False
 
 def uni_terms(t1,t2,sub):
     t1 = apply_sub_term(t1,sub)
@@ -58,12 +79,21 @@ def uni_terms(t1,t2,sub):
     if t1==t2:
         return sub
     
+    if inside(t2,t1) or inside(t1,t2):
+        return None
+    
     elif is_var(t1):
         sub[t1] = t2
+        for k in sub: # Propagate the new substitution
+            if k != t1: 
+                sub[k] = apply_sub_term(sub[k], {t1: t2})
         return sub
     
     elif is_var(t2):
         sub[t2] = t1
+        for k in sub: # Propagate the new substitution
+            if k != t2: 
+                sub[k] = apply_sub_term(sub[k], {t2: t1})
         return sub
     
     f1, n1, a1 = is_func(t1)
@@ -75,7 +105,6 @@ def uni_terms(t1,t2,sub):
         return sub
     
     return None
-
 
 def unify(t1, t2) -> dict:
     """
@@ -102,14 +131,21 @@ def unify(t1, t2) -> dict:
 
 def build_proof(clause, parents):
     proof = []
+    visited = set()
+
     def dfs(c):
-        info = parents[c]
+        if c in visited:
+            return
+        visited.add(c)
+
+        info = parents.get(c)
         if info is None:
             return
 
         c1, c2, l1, l2, subst = info
         dfs(c1)
         dfs(c2)
+
         proof.append((
             list(c1),
             list(c2),
@@ -121,6 +157,49 @@ def build_proof(clause, parents):
 
     dfs(clause)
     return proof
+
+
+def get_vars(t)-> List[str]:
+    if is_var(t):
+        return [t]
+    
+    f1,n1,a1 = is_func(t)
+    vars = []
+    if f1:
+        for a in a1:
+            vars.extend(get_vars(a))
+    return vars
+            
+def get_new_var(vars):
+    if not vars:
+        return "x"
+    n = vars[0]
+    while n in vars:
+        n = n + n
+    return n
+
+def rename(clauses, vars: set):
+    new_clauses = list()
+    for c in clauses:
+        new_c = list()
+        sub = {}
+        for l in c:
+            neg, pred, args = get_literal(l)
+            
+            for a in set(args):
+                vs = get_vars(a)
+                for v in vs:
+                    if v in vars and v not in sub:
+                        sub[v] = get_new_var(vars)
+                        vars.add(sub[v])
+            
+        for l in c:
+            new_c.append(apply_sub_literal(l,sub))
+
+        new_clauses.append(new_c)
+    return new_clauses
+                
+            
 
 
 def robinson_resolution(clauses: List[List[str]], max_iterations: int = 1000) -> Tuple[str, List]:
@@ -138,8 +217,8 @@ def robinson_resolution(clauses: List[List[str]], max_iterations: int = 1000) ->
     # TODO: Implement Robinson's resolution algorithm
 
     # rename all vars in diff clauses:
-    
-
+    vars = set()
+    clauses = rename(clauses,vars)
     clause_set = set()
     parents = {}
     new = set()
@@ -154,7 +233,10 @@ def robinson_resolution(clauses: List[List[str]], max_iterations: int = 1000) ->
 
         for i in range(len(clause_list)):
             for j in range(i + 1, len(clause_list)):
-                c1, c2 = clause_list[i], clause_list[j]
+                c11, c22 = clause_list[i], clause_list[j]
+                
+                c = rename([c11,c22],vars)
+                c1, c2 = c[0] , c[1]
 
                 for l1 in c1:
                     for l2 in c2:
@@ -176,20 +258,17 @@ def robinson_resolution(clauses: List[List[str]], max_iterations: int = 1000) ->
                         # empty clause => contradiction
                         if not resolvent:
                             empty = frozenset()
-                            parents[empty] = (c1, c2, l1, l2, sub)
+                            parents[empty] = (c11, c22, l1, l2, sub)
                             # print ( build_proof(empty,parents))
                             return "UNSAT", build_proof(empty,parents)
-                        
-                        r2 = resolvent.copy()
-                        for x in r2:
-                            if "~"+x in r2:
-                                resolvent.remove(x)
-                                resolvent.remove("~"+x)
 
                         new_clause = frozenset(resolvent)
+
+                        r2 = resolvent.copy()
+
                         if new_clause and new_clause not in clause_set:
                             new.add(new_clause)
-                            parents[new_clause] = (c1,c2,l1,l2,sub)
+                            parents[new_clause] = (c11,c22,l1,l2,sub)
 
 
         if not new:
